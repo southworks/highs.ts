@@ -15,18 +15,26 @@ if(MSVC AND CMAKE_JS_NODELIB_DEF AND CMAKE_JS_NODELIB_TARGET)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /MT")  # Static Microsoft C Runtime
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /MT")
   execute_process(COMMAND ${CMAKE_AR} /def:${CMAKE_JS_NODELIB_DEF} /out:${CMAKE_JS_NODELIB_TARGET})
-endif() 
+endif()
+
+# Set BUILD_SHARED_LIBS_PARAM based on platform
+if(MSVC)
+  set(BUILD_SHARED_LIBS_PARAM ON)  # Shared HiGHS library
+else()
+  set(BUILD_SHARED_LIBS_PARAM OFF) # Static HiGHS library
+endif()
 
 # Download and Build HiGHS (Static)
 include(ExternalProject)
 ExternalProject_Add(highs_download
   GIT_REPOSITORY https://github.com/ERGO-Code/HiGHS.git
-  GIT_TAG "66f735e60ce4d4835edaa05a35f2bd4048969c54" # v1.9.0
+  GIT_TAG "v1.9.0"
   CMAKE_ARGS
     -DCI=OFF
     -DFAST_BUILD=OFF
-    -DBUILD_SHARED_LIBS=OFF  # Static HiGHS library
+    -DBUILD_SHARED_LIBS=${BUILD_SHARED_LIBS_PARAM}
     -DCMAKE_BUILD_TYPE=Release
+    -DCMAKE_CXX_COMPILER_LAUNCHER=${CMAKE_CXX_COMPILER_LAUNCHER}
   BUILD_COMMAND ${CMAKE_COMMAND} --build . --config Release --target libhighs
   INSTALL_COMMAND ""
 )
@@ -41,15 +49,29 @@ file(GLOB SOURCE_FILES "src/*.cc")
 add_library(${PROJECT_NAME} SHARED ${SOURCE_FILES} ${CMAKE_JS_SRC})
 set_target_properties(${PROJECT_NAME} PROPERTIES PREFIX "" SUFFIX ".node")
 
-# Set HiGHS Library Path (Static)
+# Make sure we link against the correct libraries
 if(MSVC)
-  set(HIGHS_LIB_PATH "${binary_dir}/lib/Release/highs.lib")
+  target_link_libraries(${PROJECT_NAME} 
+    ${CMAKE_JS_LIB}
+    ${binary_dir}/lib/release/highs.lib
+    ${CMAKE_JS_NODELIB_TARGET}
+  )
 else()
-  set(HIGHS_LIB_PATH "${binary_dir}/lib/libhighs.a")
+  target_link_libraries(${PROJECT_NAME} 
+    ${CMAKE_JS_LIB}
+    ${binary_dir}/lib/libhighs.a
+  )
 endif()
 
-# Link Libraries (Static HiGHS)
-target_link_libraries(${PROJECT_NAME} ${CMAKE_JS_LIB} ${HIGHS_LIB_PATH})
-
-# Build Dependency and Error Handling
+# Make sure highs_download is built before the addon
 add_dependencies(${PROJECT_NAME} highs_download)
+
+# Copy highs.dll to the output directory after highs is built
+if(MSVC)
+  add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:${PROJECT_NAME}>
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      ${binary_dir}/bin/release/highs.dll
+      $<TARGET_FILE_DIR:${PROJECT_NAME}>/highs.dll
+  )
+endif()
